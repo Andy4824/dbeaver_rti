@@ -1,6 +1,6 @@
 /*
  * DBeaver - Universal Database Manager
- * Copyright (C) 2010-2023 DBeaver Corp and others
+ * Copyright (C) 2010-2024 DBeaver Corp and others
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@ import org.jkiss.dbeaver.ext.postgresql.model.*;
 import org.jkiss.dbeaver.model.DBConstants;
 import org.jkiss.dbeaver.model.DBPDataSource;
 import org.jkiss.dbeaver.model.DBPEvaluationContext;
+import org.jkiss.dbeaver.model.DBPObject;
+import org.jkiss.dbeaver.model.DBPScriptObject;
 import org.jkiss.dbeaver.model.DBUtils;
 import org.jkiss.dbeaver.model.edit.DBECommandContext;
 import org.jkiss.dbeaver.model.edit.DBEObjectRenamer;
@@ -30,14 +32,18 @@ import org.jkiss.dbeaver.model.edit.DBEPersistAction;
 import org.jkiss.dbeaver.model.exec.DBCExecutionContext;
 import org.jkiss.dbeaver.model.impl.edit.SQLDatabasePersistAction;
 import org.jkiss.dbeaver.model.impl.edit.SQLDatabasePersistActionAtomic;
+import org.jkiss.dbeaver.model.impl.sql.edit.SQLObjectEditor.NestedObjectCommand;
+import org.jkiss.dbeaver.model.impl.jdbc.struct.JDBCTableColumn;
 import org.jkiss.dbeaver.model.messages.ModelMessages;
 import org.jkiss.dbeaver.model.runtime.DBRProgressMonitor;
 import org.jkiss.dbeaver.model.struct.DBSObject;
 import org.jkiss.dbeaver.model.struct.cache.DBSObjectCache;
 import org.jkiss.dbeaver.utils.GeneralUtils;
 import org.jkiss.utils.CommonUtils;
+import org.jkiss.dbeaver.model.struct.DBSEntity;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -110,6 +116,42 @@ public class PostgreTableManager extends PostgreTableManagerBase implements DBEO
             return table.getPersistence().getTableTypeClause().toLowerCase();
         }
     }
+    
+    @Override
+    protected void fillColumns(final Collection<NestedObjectCommand> orderedCommands, Map<String, Object> options, DBRProgressMonitor monitor, final DBSEntity table) {
+    	int maxNameLength = 0;
+        int maxmodifierLength = 0;
+        
+    	for (NestedObjectCommand nestedCommand : orderedCommands) {
+        	DBPObject column = nestedCommand.getObject();
+            if (column != null && column instanceof JDBCTableColumn) {
+        	    String columnName = ((JDBCTableColumn)column).getName();
+        	    if (columnName != null && columnName.length() > maxNameLength) {
+        	    	maxNameLength = columnName.length();
+        	    }
+            }
+        }
+        
+        if (maxNameLength > 0) {
+        	options.put("maxColumnNameLength", Integer.valueOf(maxNameLength));
+        	
+        	Map<String, Object> attrOptions = new HashMap(options);
+            attrOptions.put(DBPScriptObject.OPTION_INCLUDE_COMMENTS, false);
+            for (NestedObjectCommand nestedCommand : orderedCommands) {
+            	DBPObject column = nestedCommand.getObject();
+                if (column != null && column instanceof JDBCTableColumn) {            	
+                	String nestedDeclaration = nestedCommand.getNestedDeclaration(monitor, table, attrOptions);
+                	int attrLength = nestedDeclaration.length() - maxNameLength - 1;
+                	if (attrLength > 0 && maxmodifierLength < attrLength && attrLength + maxNameLength < 71) {
+                		maxmodifierLength = attrLength;
+                	}
+                }
+            }
+            if (maxmodifierLength > 0) {
+            	options.put("maxColumnModifierLength", Integer.valueOf(maxmodifierLength));
+            }
+        }
+    }
 
     @Override
     protected PostgreTableBase createDatabaseObject(DBRProgressMonitor monitor, DBECommandContext context, Object container, Object copyFrom, Map<String, Object> options) throws DBException {
@@ -154,7 +196,8 @@ public class PostgreTableManager extends PostgreTableManagerBase implements DBEO
 
     private void generateAlterActions(DBRProgressMonitor monitor, List<DBEPersistAction> actionList, ObjectChangeCommand command) throws DBException {
         final PostgreTable table = (PostgreTable) command.getObject();
-        final String alterPrefix = "alter table " + command.getObject().getFullyQualifiedName(DBPEvaluationContext.DDL) + " ";//$NON-NLS-1$ //$NON-NLS-2$
+        final String alterPrefix = "alter " + table.getTableTypeName().toLowerCase() + " " + //$NON-NLS-1$
+            command.getObject().getFullyQualifiedName(DBPEvaluationContext.DDL) + " ";
 
         if (command.hasProperty("partitionKey")) {//$NON-NLS-1$
             actionList.add(new SQLDatabasePersistAction(alterPrefix + "partition by " + table.getPartitionKey()));//$NON-NLS-1$
@@ -164,7 +207,7 @@ public class PostgreTableManager extends PostgreTableManagerBase implements DBEO
         }
         if (command.hasProperty("hasRowLevelSecurity") && table.getDataSource().getServerType().supportsRowLevelSecurity()) {
             actionList.add(new SQLDatabasePersistAction(
-                alterPrefix + (table.isHasRowLevelSecurity() ? "ENABLE" : "DISABLE") + " ROW LEVEL SECURITY"
+                alterPrefix + (table.isHasRowLevelSecurity() ? "enable" : "disable") + " row level security"
             ));
         }
         if (command.hasProperty("tablespace")) {//$NON-NLS-1$
@@ -184,11 +227,14 @@ public class PostgreTableManager extends PostgreTableManagerBase implements DBEO
     @Override
     protected void addObjectRenameActions(DBRProgressMonitor monitor, DBCExecutionContext executionContext, List<DBEPersistAction> actions, ObjectRenameCommand command, Map<String, Object> options)
     {
+        PostgreTableBase table = command.getObject();
         actions.add(
             new SQLDatabasePersistAction(
                 "Rename table",
-                "alter table " + DBUtils.getQuotedIdentifier(command.getObject().getSchema()) + "." + DBUtils.getQuotedIdentifier(command.getObject().getDataSource(), command.getOldName()) + //$NON-NLS-1$
-                    " rename to " + DBUtils.getQuotedIdentifier(command.getObject().getDataSource(), command.getNewName())) //$NON-NLS-1$
+                "alter " + table.getTableTypeName() + " " + //$NON-NLS-1$
+                    DBUtils.getQuotedIdentifier(table.getSchema()) + "." +
+                    DBUtils.getQuotedIdentifier(table.getDataSource(), command.getOldName()) +
+                    " rename to " + DBUtils.getQuotedIdentifier(table.getDataSource(), command.getNewName())) //$NON-NLS-1$
         );
     }
 

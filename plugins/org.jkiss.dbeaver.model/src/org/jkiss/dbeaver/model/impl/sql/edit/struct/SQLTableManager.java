@@ -1,6 +1,6 @@
 /*
  * DBeaver - Universal Database Manager
- * Copyright (C) 2010-2023 DBeaver Corp and others
+ * Copyright (C) 2010-2024 DBeaver Corp and others
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@ package org.jkiss.dbeaver.model.impl.sql.edit.struct;
 
 import org.jkiss.code.NotNull;
 import org.jkiss.dbeaver.DBException;
+import org.jkiss.dbeaver.ModelPreferences;
 import org.jkiss.dbeaver.model.DBPDataSource;
-import org.jkiss.dbeaver.model.DBPObject;
 import org.jkiss.dbeaver.model.DBPScriptObject;
 import org.jkiss.dbeaver.model.DBUtils;
 import org.jkiss.dbeaver.model.edit.DBEPersistAction;
@@ -27,10 +27,8 @@ import org.jkiss.dbeaver.model.edit.DBERegistry;
 import org.jkiss.dbeaver.model.exec.DBCExecutionContext;
 import org.jkiss.dbeaver.model.impl.edit.SQLDatabasePersistAction;
 import org.jkiss.dbeaver.model.impl.edit.SQLDatabasePersistActionComment;
-import org.jkiss.dbeaver.model.impl.jdbc.struct.JDBCTableColumn;
 import org.jkiss.dbeaver.model.impl.sql.edit.SQLObjectEditor;
 import org.jkiss.dbeaver.model.impl.sql.edit.SQLStructEditor;
-import org.jkiss.dbeaver.model.impl.sql.edit.struct.SQLTableColumnManager.ColumnModifier;
 import org.jkiss.dbeaver.model.messages.ModelMessages;
 import org.jkiss.dbeaver.model.runtime.DBRProgressMonitor;
 import org.jkiss.dbeaver.model.sql.SQLUtils;
@@ -71,12 +69,16 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
     protected boolean hasAttrDeclarations(OBJECT_TYPE table) {
         return true;
     }
+    
+    protected void fillColumns(final Collection<NestedObjectCommand> orderedCommands, Map<String, Object> options, DBRProgressMonitor monitor, final DBSEntity table) {
+    	
+    }
 
     @Override
     protected void addStructObjectCreateActions(DBRProgressMonitor monitor, DBCExecutionContext executionContext, List<DBEPersistAction> actions, StructCreateCommand command, Map<String, Object> options) throws DBException {
         final OBJECT_TYPE table = command.getObject();
 
-        final NestedObjectCommand tableProps = command.getObjectCommands().get(table);
+        final NestedObjectCommand<?, ?> tableProps = command.getObjectCommands().get(table);
         if (tableProps == null) {
             log.warn("Object change command not found"); //$NON-NLS-1$
             return;
@@ -91,38 +93,8 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
         boolean hasForeignKeys = false;
         
         final Collection<NestedObjectCommand> orderedCommands = getNestedOrderedCommands(command);
-        int maxNameLength = 0;
-        int maxmodifierLength = 0;
         
-        for (NestedObjectCommand nestedCommand : orderedCommands) {
-        	DBPObject column = nestedCommand.getObject();
-            if (column != null && column instanceof JDBCTableColumn) {
-        	    String columnName = ((JDBCTableColumn)column).getName();
-        	    if (columnName != null && columnName.length() > maxNameLength) {
-        	    	maxNameLength = columnName.length();
-        	    }
-            }
-        }
-        
-        if (maxNameLength > 0) {
-        	options.put("maxColumnNameLength", Integer.valueOf(maxNameLength));
-        	
-        	Map<String, Object> attrOptions = new HashMap(options);
-            attrOptions.put(DBPScriptObject.OPTION_INCLUDE_COMMENTS, false);
-            for (NestedObjectCommand nestedCommand : orderedCommands) {
-            	DBPObject column = nestedCommand.getObject();
-                if (column != null && column instanceof JDBCTableColumn) {            	
-                	String nestedDeclaration = nestedCommand.getNestedDeclaration(monitor, table, attrOptions);
-                	int attrLength = nestedDeclaration.length() - maxNameLength - 1;
-                	if (attrLength > 0 && maxmodifierLength < attrLength && attrLength + maxNameLength < 71) {
-                		maxmodifierLength = attrLength;
-                	}
-                }
-            }
-            if (maxmodifierLength > 0) {
-            	options.put("maxColumnModifierLength", Integer.valueOf(maxmodifierLength));
-            }
-        }
+        fillColumns(orderedCommands, options, monitor, table);
         
         for (NestedObjectCommand nestedCommand : orderedCommands) {
             if (nestedCommand.getObject() == table) {
@@ -296,7 +268,10 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
             return actions.toArray(new DBEPersistAction[0]);
         }
 
-        if (table.isPersisted() && isIncludeDropInDDL(table)) {
+        if (table.isPersisted() && isIncludeDropInDDL(table) &&
+            (table.getDataSource() == null ||
+                table.getDataSource().getContainer().getPreferenceStore().getBoolean(ModelPreferences.META_EXTRA_DDL_INFO))
+        ) {
             actions.add(new SQLDatabasePersistActionComment(table.getDataSource(), "Drop table"));
             for (DBEPersistAction delAction : new ObjectDeleteCommand(table, ModelMessages.model_jdbc_delete_object).getPersistActions(monitor, executionContext, options)) {
                 String script = delAction.getScript();
@@ -322,7 +297,7 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
                 command.aggregateCommand(tcm.makeCreateCommand(column, options));
             }
         }
-        if (pkm != null) {
+        if (pkm != null && !CommonUtils.getOption(options, DBPScriptObject.OPTION_SKIP_UNIQUE_KEYS)) {
             try {
                 for (DBSEntityConstraint constraint : CommonUtils.safeCollection(table.getConstraints(monitor))) {
                     if (skipObject(constraint)) {
@@ -363,7 +338,7 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
                 log.debug(e);
             }
         }
-        if (im != null && table instanceof DBSTable) {
+        if (im != null && table instanceof DBSTable && !CommonUtils.getOption(options, DBPScriptObject.OPTION_SKIP_INDEXES)) {
             try {
                 for (DBSTableIndex index : CommonUtils.safeCollection(((DBSTable)table).getIndexes(monitor))) {
                     if (!isIncludeIndexInDDL(monitor, index)) {

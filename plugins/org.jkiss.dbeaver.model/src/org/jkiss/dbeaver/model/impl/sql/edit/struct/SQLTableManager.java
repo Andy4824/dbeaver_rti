@@ -99,10 +99,10 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
         for (NestedObjectCommand nestedCommand : orderedCommands) {
             if (nestedCommand.getObject() == table) {
                 continue;
-            }
+            } //dataTypeName
             if (nestedCommand.getObject() instanceof DBSTableForeignKey) {
-        	hasForeignKeys = true;
-        	continue;
+            	hasForeignKeys = true;
+            	continue;
             }
             if (excludeFromDDL(nestedCommand, orderedCommands)) {
                 continue;
@@ -110,7 +110,9 @@ public abstract class SQLTableManager<OBJECT_TYPE extends DBSEntity, CONTAINER_T
             String nestedDeclaration = nestedCommand.getNestedDeclaration(monitor, table, options);
             if (!CommonUtils.isEmpty(nestedDeclaration)) {
         	nestedDeclaration = nestedDeclaration
-    			.replace("'::text", "'");
+    			.replace("'::text", "'")
+    			.replace("'::varchar", "'")
+    			.replace("'::character varying", "'");
                 // Insert nested declaration
                 if (hasNestedDeclarations) {
                     // Check for embedded comment

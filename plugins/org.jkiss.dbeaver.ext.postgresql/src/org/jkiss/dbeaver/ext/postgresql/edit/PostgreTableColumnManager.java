@@ -58,15 +58,7 @@ public class PostgreTableColumnManager extends SQLTableColumnManager<PostgreTabl
         final PostgreDataType dataType = column.getDataType();
         if (dataType != null) {
             final PostgreSchema typeContainer = dataType.getParentObject();
-            if (typeContainer == null ||
-                typeContainer.isPublicSchema() ||
-                typeContainer.isCatalogSchema())
-            {
-                sql.append(dataType.getFullTypeName());
-            } else {
-        	    sql.append(dataType.getFullyQualifiedName(DBPEvaluationContext.DDL));
-            }
-
+      	    sql.append(dataType.getFullyQualifiedName(DBPEvaluationContext.DDL));
             final PostgreTypeHandler handler = PostgreTypeHandlerProvider.getTypeHandler(dataType);
             if (handler != null) {
                 sql.append(handler.getTypeModifiersString(dataType, column.getTypeMod()));
@@ -250,10 +242,10 @@ public class PostgreTableColumnManager extends SQLTableColumnManager<PostgreTabl
     }
 
     public static void addColumnCommentAction(List<DBEPersistAction> actionList, PostgreAttribute column, Integer maxColumnNameLength) {
-	StringBuilder columnName = new StringBuilder(DBUtils.getQuotedIdentifier(column));
-	while (columnName.length() < maxColumnNameLength) {
-	    columnName.append(" ");
-	}
+		StringBuilder columnName = new StringBuilder(DBUtils.getQuotedIdentifier(column));
+		while (columnName.length() < maxColumnNameLength) {
+		    columnName.append(" ");
+		}
         actionList.add(new SQLDatabasePersistAction("Set column comment", "comment on column " +
             DBUtils.getObjectFullName(column.getTable(), DBPEvaluationContext.DDL) + "." + columnName.toString() +
             " is " + SQLUtils.quoteString(column, CommonUtils.notEmpty(column.getDescription()))));
